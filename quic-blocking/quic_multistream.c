@@ -156,8 +156,10 @@ main(int argc, const char *argv[])
 	BIO			*udp_bio;
 	BIO_ADDR		*daddr_bio;
 	char			 buf[BUF_LEN];
-	const char		 req[] = "GET LICENSE.txt\r\n";
+	const char		 req_lic[] = "GET LICENSE.txt\r\n";
+	const char		 req_hack[] = "GET HACKING.md\r\n";
 	int			 rcvd, sent;
+	int			 e;
 
 	if (argc < 3) {
 		fprintf(stderr, "usage %s server_ip port\n", argv[0]);
@@ -200,26 +202,80 @@ main(int argc, const char *argv[])
 	}
 	udp_bio = NULL;	/* onnership transferred to ssl */
 
-	if (SSL_connect(ssl) != 1) {
+	if ((e = SSL_connect(ssl)) != 1) {
 		fprintf(stderr, "SSL_connect() failed %s\n",
-		    ERR_error_string(SSL_get_error(ssl, 0), buf));
+		    ERR_error_string(SSL_get_error(ssl, e), buf));
 		SSL_free(ssl);
 		SSL_CTX_free(ssl_ctx);
 		return (1);
 	}
 
-	if ((sent = SSL_write(ssl, req, sizeof (req) - 1)) !=
-	    (sizeof (req) - 1)) {
+	ssl_stream = SSL_new_stream(ssl, 0);
+	if (ssl_stream == NULL) {
+		fprintf(stderr, "SSL_stream_new() failed\n");
+		SSL_free(ssl);
+		SSL_CTX_free(ssl_ctx);
+		return (1);
+	}
+	if ((sent = SSL_write(ssl_stream, req_lic, sizeof (req_lic) - 1)) !=
+	    (sizeof (req_lic) - 1)) {
 		fprintf(stderr, "SSL_write() failed %s\n",
 		    ERR_error_string(SSL_get_error(ssl, sent), buf));
+		SSL_free(ssl_stream);
 		SSL_shutdown(ssl);
 		SSL_free(ssl);
 		SSL_CTX_free(ssl_ctx);
 		return (1);
 	}
 
-	while ((rcvd = SSL_read(ssl, buf, sizeof (buf))) > 0)
+	while ((rcvd = SSL_read(ssl_stream, buf, sizeof (buf))) > 0)
 		write(1, buf, rcvd);
+
+	SSL_free(ssl_stream);
+
+	if (rcvd < 0) {
+		fprintf(stderr, "SSL_read() failed %s\n",
+		    ERR_error_string(SSL_get_error(ssl, rcvd), buf));
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+		SSL_CTX_free(ssl_ctx);
+		return (1);
+	}
+
+	if ((sent = SSL_write(ssl, req_hack, sizeof (req_hack) - 1)) !=
+	    (sizeof (req_hack) - 1)) {
+		fprintf(stderr, "this is actually OK\n");
+	} else {
+		fprintf(stderr, "this is really bad OK\n");
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+		SSL_CTX_free(ssl_ctx);
+		return (1);
+	}
+
+	/* create another stream */
+	ssl_stream = SSL_new_stream(ssl, 0);
+	if (ssl_stream == NULL) {
+		fprintf(stderr, "SSL_stream_new() failed\n");
+		SSL_free(ssl);
+		SSL_CTX_free(ssl_ctx);
+		return (1);
+	}
+	if ((sent = SSL_write(ssl_stream, req_hack, sizeof (req_hack) - 1)) !=
+	    (sizeof (req_hack) - 1)) {
+		fprintf(stderr, "SSL_write() failed %s\n",
+		    ERR_error_string(SSL_get_error(ssl, sent), buf));
+		SSL_free(ssl_stream);
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+		SSL_CTX_free(ssl_ctx);
+		return (1);
+	}
+
+	while ((rcvd = SSL_read(ssl_stream, buf, sizeof (buf))) > 0)
+		write(1, buf, rcvd);
+
+	SSL_free(ssl_stream);
 
 	if (rcvd < 0) {
 		fprintf(stderr, "SSL_read() failed %s\n",
